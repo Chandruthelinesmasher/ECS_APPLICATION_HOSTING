@@ -8,6 +8,7 @@ on:
     paths:
       - '*.tf'
       - '*.tfvars'
+      - 'bootstrap/**'
       - 'modules/**'
       - 'environments/**'
       - '.github/workflows/infrastructure.yml'
@@ -18,6 +19,7 @@ on:
     paths:
       - '*.tf'
       - '*.tfvars'
+      - 'bootstrap/**'
       - 'modules/**'
       - 'environments/**'
       - '.github/workflows/infrastructure.yml'
@@ -33,7 +35,7 @@ jobs:
 
   # ── DEV PUSH ────────────────────────────────────────────────────────────────
   # Step 1 of 2: Create S3 bucket + DynamoDB table for staging Terraform state.
-  # Runs from the repo root where backend-resources.tf lives.
+  # Runs from bootstrap/ which is isolated from the root app module.
   # Uses ephemeral local state (intentional for bootstrap only).
   # Skipped automatically if the bucket already exists.
   bootstrap-staging:
@@ -82,18 +84,15 @@ jobs:
       - name: Terraform Init (local state)
         if: steps.check_bucket.outputs.exists == 'false'
         run: terraform init
+        working-directory: bootstrap
 
       - name: Create S3 Bucket and DynamoDB Table
         if: steps.check_bucket.outputs.exists == 'false'
         run: |
           terraform apply -auto-approve -no-color \
             -var="app_name=${{ env.APP_NAME }}" \
-            -var="environment=staging" \
-            -target=aws_s3_bucket.terraform_state \
-            -target=aws_s3_bucket_versioning.terraform_state \
-            -target=aws_s3_bucket_server_side_encryption_configuration.terraform_state \
-            -target=aws_s3_bucket_public_access_block.terraform_state \
-            -target=aws_dynamodb_table.terraform_locks
+            -var="environment=staging"
+        working-directory: bootstrap
 
   # Step 2 of 2: Deploy staging resources after backend is confirmed ready.
   deploy-staging:
@@ -192,18 +191,15 @@ jobs:
       - name: Terraform Init (local state)
         if: steps.check_bucket.outputs.exists == 'false'
         run: terraform init
+        working-directory: bootstrap
 
       - name: Create S3 Bucket and DynamoDB Table
         if: steps.check_bucket.outputs.exists == 'false'
         run: |
           terraform apply -auto-approve -no-color \
             -var="app_name=${{ env.APP_NAME }}" \
-            -var="environment=production" \
-            -target=aws_s3_bucket.terraform_state \
-            -target=aws_s3_bucket_versioning.terraform_state \
-            -target=aws_s3_bucket_server_side_encryption_configuration.terraform_state \
-            -target=aws_s3_bucket_public_access_block.terraform_state \
-            -target=aws_dynamodb_table.terraform_locks
+            -var="environment=production"
+        working-directory: bootstrap
 
   # Step 2 of 2: Deploy production resources after backend is confirmed ready.
   deploy-production:

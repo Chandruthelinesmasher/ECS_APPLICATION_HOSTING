@@ -1,5 +1,4 @@
-# Resources needed for bootstrapping the remote Terraform S3 backend and DynamoDB lock table.
-# Run 'terraform apply' with local backend first to create these, then enable the backend block in backend.tf.
+data "aws_caller_identity" "current" {}
 
 resource "aws_s3_bucket" "terraform_state" {
   bucket        = "${var.app_name}-${var.environment}-tf-state-${data.aws_caller_identity.current.account_id}"
@@ -52,4 +51,10 @@ resource "aws_dynamodb_table" "terraform_locks" {
   }
 }
 
-data "aws_caller_identity" "current" {}
+output "bucket_name" {
+  value = aws_s3_bucket.terraform_state.bucket
+}
+
+output "dynamodb_table" {
+  value = aws_dynamodb_table.terraform_locks.name
+}
