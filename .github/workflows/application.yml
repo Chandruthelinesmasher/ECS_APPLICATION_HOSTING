@@ -90,3 +90,4 @@ jobs:
           service: ecs-modular-${{ matrix.environment }}-service
           cluster: ecs-modular-${{ matrix.environment }}-cluster
           wait-for-service-stability: true
+          wait-for-minutes: 10
