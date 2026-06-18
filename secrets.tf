@@ -12,8 +12,8 @@ resource "aws_secretsmanager_secret" "app_secrets" {
 resource "aws_secretsmanager_secret_version" "app_secrets_val" {
   secret_id = aws_secretsmanager_secret.app_secrets.id
   secret_string = jsonencode({
-    DATABASE_URL   = "postgresql://db_user:dummy_password@db_host:5432/db_name"
-    API_SECRET_KEY = "super_secret_key_placeholder"
+    DATABASE_URL   = module.rds.connection_url
+    API_SECRET_KEY = var.api_secret_key
     PORT           = tostring(var.container_port)
   })
 }

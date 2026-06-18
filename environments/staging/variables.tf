@@ -63,3 +63,40 @@ variable "desired_count" {
   type        = number
   default     = 1
 }
+
+# RDS Configuration
+variable "db_name" {
+  description = "The name of the PostgreSQL database"
+  type        = string
+  default     = "appdb"
+}
+
+variable "db_username" {
+  description = "The master username for the database"
+  type        = string
+  default     = "appuser"
+}
+
+variable "db_instance_class" {
+  description = "The RDS instance class"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_allocated_storage" {
+  description = "Allocated storage for RDS in GiB"
+  type        = number
+  default     = 20
+}
+
+variable "db_multi_az" {
+  description = "Enable multi-AZ for RDS"
+  type        = bool
+  default     = false
+}
+
+variable "api_secret_key" {
+  description = "The API secret key (set via TF_VAR_api_secret_key in CI)"
+  type        = string
+  sensitive   = true
+}

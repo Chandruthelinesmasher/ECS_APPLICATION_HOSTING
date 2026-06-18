@@ -100,6 +100,8 @@ jobs:
     needs: bootstrap-staging
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    env:
+      TF_VAR_api_secret_key: ${{ secrets.STAGING_API_SECRET_KEY }}
 
     steps:
       - name: Checkout Code
@@ -207,6 +209,8 @@ jobs:
     needs: bootstrap-production
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      TF_VAR_api_secret_key: ${{ secrets.PRODUCTION_API_SECRET_KEY }}
 
     steps:
       - name: Checkout Code
@@ -307,3 +311,5 @@ jobs:
       - name: Terraform Plan
         run: terraform plan -no-color
         working-directory: environments/${{ matrix.environment }}
+        env:
+          TF_VAR_api_secret_key: ${{ matrix.environment == 'staging' && secrets.STAGING_API_SECRET_KEY || secrets.PRODUCTION_API_SECRET_KEY }}

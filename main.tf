@@ -27,6 +27,20 @@ module "alb" {
   container_port    = var.container_port
 }
 
+module "rds" {
+  source             = "./modules/rds"
+  environment        = var.environment
+  app_name           = var.app_name
+  vpc_id             = module.vpc.vpc_id
+  vpc_cidr           = var.vpc_cidr
+  private_subnet_ids = module.vpc.private_subnet_ids
+  db_name            = var.db_name
+  db_username        = var.db_username
+  db_instance_class  = var.db_instance_class
+  allocated_storage  = var.db_allocated_storage
+  multi_az           = var.db_multi_az
+}
+
 module "ecs" {
   source                      = "./modules/ecs"
   environment                 = var.environment
@@ -43,4 +57,7 @@ module "ecs" {
   container_memory            = var.container_memory
   desired_count               = var.desired_count
   secrets_arn                 = aws_secretsmanager_secret.app_secrets.arn
+
+  # Ensures ECS tasks start only after the real DB URL is written to Secrets Manager
+  depends_on = [aws_secretsmanager_secret_version.app_secrets_val]
 }

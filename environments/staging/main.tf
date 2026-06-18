@@ -12,4 +12,11 @@ module "infra" {
   container_cpu        = var.container_cpu
   container_memory     = var.container_memory
   desired_count        = var.desired_count
+
+  db_name              = var.db_name
+  db_username          = var.db_username
+  db_instance_class    = var.db_instance_class
+  db_allocated_storage = var.db_allocated_storage
+  db_multi_az          = var.db_multi_az
+  api_secret_key       = var.api_secret_key
 }

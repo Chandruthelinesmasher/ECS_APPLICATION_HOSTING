@@ -22,3 +22,8 @@ output "secrets_manager_secret_arn" {
   description = "The ARN of the Secrets Manager secret"
   value       = aws_secretsmanager_secret.app_secrets.arn
 }
+
+output "db_endpoint" {
+  description = "The RDS instance endpoint"
+  value       = module.rds.db_endpoint
+}
