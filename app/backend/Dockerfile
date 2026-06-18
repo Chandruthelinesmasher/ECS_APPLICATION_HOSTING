@@ -1,23 +1,25 @@
-FROM node:20-alpine
+# Stage 1: Build the React frontend
+FROM node:20-alpine AS frontend-builder
+WORKDIR /build/frontend
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
 
-# Set working directory
+# Stage 2: Backend runtime with frontend static files
+FROM node:20-alpine
 WORKDIR /usr/src/app
 
-# Copy package files
-COPY package*.json ./
-
-# Install dependencies
+COPY backend/package*.json ./
 RUN npm ci --only=production
 
-# Copy application source code
-COPY . .
+COPY backend/ .
 
-# Expose server port
+# Place the frontend build where server.js expects it: ../frontend/dist
+COPY --from=frontend-builder /build/frontend/dist /usr/src/frontend/dist
+
 EXPOSE 5000
-
-# Set environment variables
 ENV NODE_ENV=production
 ENV PORT=5000
 
-# Start application
-CMD [ "node", "server.js" ]
+CMD ["node", "server.js"]
