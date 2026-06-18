@@ -24,24 +24,29 @@ on:
 
 env:
   AWS_REGION: us-east-1
+  APP_NAME: ecs-modular
 
 permissions:
   contents: read
 
 jobs:
-  terraform:
-    name: Terraform Lint and Deploy
+
+  # ── DEV PUSH ────────────────────────────────────────────────────────────────
+  # Step 1 of 2: Create S3 bucket + DynamoDB table for staging Terraform state.
+  # Runs from the repo root where backend-resources.tf lives.
+  # Uses ephemeral local state (intentional for bootstrap only).
+  # Skipped automatically if the bucket already exists.
+  bootstrap-staging:
+    name: Bootstrap Staging Backend
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        environment: [staging, production]
-      fail-fast: false
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    outputs:
+      bucket_name: ${{ steps.set_bucket.outputs.bucket_name }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Setup AWS credentials
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -49,39 +54,260 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Setup Terraform CLI
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.5.0
 
-      # Validate format
+      - name: Get AWS Account ID
+        id: account
+        run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
+
+      - name: Set Bucket Name
+        id: set_bucket
+        run: |
+          echo "bucket_name=${{ env.APP_NAME }}-staging-tf-state-${{ steps.account.outputs.id }}" >> $GITHUB_OUTPUT
+
+      - name: Check if S3 Bucket Already Exists
+        id: check_bucket
+        run: |
+          if aws s3api head-bucket --bucket "${{ steps.set_bucket.outputs.bucket_name }}" 2>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Bucket already exists, skipping bootstrap."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Bucket not found, will create backend resources."
+          fi
+
+      - name: Terraform Init (local state)
+        if: steps.check_bucket.outputs.exists == 'false'
+        run: terraform init
+
+      - name: Create S3 Bucket and DynamoDB Table
+        if: steps.check_bucket.outputs.exists == 'false'
+        run: |
+          terraform apply -auto-approve -no-color \
+            -var="app_name=${{ env.APP_NAME }}" \
+            -var="environment=staging" \
+            -target=aws_s3_bucket.terraform_state \
+            -target=aws_s3_bucket_versioning.terraform_state \
+            -target=aws_s3_bucket_server_side_encryption_configuration.terraform_state \
+            -target=aws_s3_bucket_public_access_block.terraform_state \
+            -target=aws_dynamodb_table.terraform_locks
+
+  # Step 2 of 2: Deploy staging resources after backend is confirmed ready.
+  deploy-staging:
+    name: Deploy Staging
+    needs: bootstrap-staging
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: environments/staging
+
+      - name: Terraform Init with S3 Backend
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ needs.bootstrap-staging.outputs.bucket_name }}" \
+            -backend-config="key=staging/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.APP_NAME }}-staging-tf-locks" \
+            -backend-config="encrypt=true"
+        working-directory: environments/staging
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: environments/staging
+
+      - name: Terraform Plan
+        run: terraform plan -no-color
+        working-directory: environments/staging
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -no-color
+        working-directory: environments/staging
+
+  # ── MAIN PUSH ───────────────────────────────────────────────────────────────
+  # Step 1 of 2: Create S3 bucket + DynamoDB table for production Terraform state.
+  bootstrap-production:
+    name: Bootstrap Production Backend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      bucket_name: ${{ steps.set_bucket.outputs.bucket_name }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Get AWS Account ID
+        id: account
+        run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
+
+      - name: Set Bucket Name
+        id: set_bucket
+        run: |
+          echo "bucket_name=${{ env.APP_NAME }}-production-tf-state-${{ steps.account.outputs.id }}" >> $GITHUB_OUTPUT
+
+      - name: Check if S3 Bucket Already Exists
+        id: check_bucket
+        run: |
+          if aws s3api head-bucket --bucket "${{ steps.set_bucket.outputs.bucket_name }}" 2>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Bucket already exists, skipping bootstrap."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Bucket not found, will create backend resources."
+          fi
+
+      - name: Terraform Init (local state)
+        if: steps.check_bucket.outputs.exists == 'false'
+        run: terraform init
+
+      - name: Create S3 Bucket and DynamoDB Table
+        if: steps.check_bucket.outputs.exists == 'false'
+        run: |
+          terraform apply -auto-approve -no-color \
+            -var="app_name=${{ env.APP_NAME }}" \
+            -var="environment=production" \
+            -target=aws_s3_bucket.terraform_state \
+            -target=aws_s3_bucket_versioning.terraform_state \
+            -target=aws_s3_bucket_server_side_encryption_configuration.terraform_state \
+            -target=aws_s3_bucket_public_access_block.terraform_state \
+            -target=aws_dynamodb_table.terraform_locks
+
+  # Step 2 of 2: Deploy production resources after backend is confirmed ready.
+  deploy-production:
+    name: Deploy Production
+    needs: bootstrap-production
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: environments/production
+
+      - name: Terraform Init with S3 Backend
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ needs.bootstrap-production.outputs.bucket_name }}" \
+            -backend-config="key=production/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.APP_NAME }}-production-tf-locks" \
+            -backend-config="encrypt=true"
+        working-directory: environments/production
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: environments/production
+
+      - name: Terraform Plan
+        run: terraform plan -no-color
+        working-directory: environments/production
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -no-color
+        working-directory: environments/production
+
+  # ── PULL REQUEST CHECKS ─────────────────────────────────────────────────────
+  # Format check, validate, and plan only — no apply, no bootstrap.
+  # Assumes backend already exists (bootstrap ran on a prior dev/main push).
+  pr-check:
+    name: PR Check - ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    strategy:
+      matrix:
+        include:
+          - environment: staging
+            base_branch: dev
+          - environment: production
+            base_branch: main
+      fail-fast: false
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Get AWS Account ID
+        id: account
+        run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
+
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
         working-directory: environments/${{ matrix.environment }}
 
-      # Initialize backend and provider modules
       - name: Terraform Init
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.APP_NAME }}-${{ matrix.environment }}-tf-state-${{ steps.account.outputs.id }}" \
+            -backend-config="key=${{ matrix.environment }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.APP_NAME }}-${{ matrix.environment }}-tf-locks" \
+            -backend-config="encrypt=true"
         working-directory: environments/${{ matrix.environment }}
 
-      # Validate configuration syntax
       - name: Terraform Validate
         run: terraform validate
         working-directory: environments/${{ matrix.environment }}
 
-      # Generate planning run execution output
       - name: Terraform Plan
         run: terraform plan -no-color
-        working-directory: environments/${{ matrix.environment }}
-
-      # Perform apply step: staging on pushes to dev/main, production only on pushes to main
-      - name: Terraform Apply
-        if: >
-          github.event_name == 'push' &&
-          (
-            (matrix.environment == 'staging' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-            (matrix.environment == 'production' && github.ref == 'refs/heads/main')
-          )
-        run: terraform apply -auto-approve -no-color
         working-directory: environments/${{ matrix.environment }}
