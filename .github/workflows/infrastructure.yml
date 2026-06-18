@@ -1,0 +1,87 @@
+name: Terraform Infrastructure CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - '*.tf'
+      - '*.tfvars'
+      - 'modules/**'
+      - 'environments/**'
+      - '.github/workflows/infrastructure.yml'
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - '*.tf'
+      - '*.tfvars'
+      - 'modules/**'
+      - 'environments/**'
+      - '.github/workflows/infrastructure.yml'
+
+env:
+  AWS_REGION: us-east-1
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform Lint and Deploy
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [staging, production]
+      fail-fast: false
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Setup AWS credentials
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Setup Terraform CLI
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      # Validate format
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: environments/${{ matrix.environment }}
+
+      # Initialize backend and provider modules
+      - name: Terraform Init
+        run: terraform init
+        working-directory: environments/${{ matrix.environment }}
+
+      # Validate configuration syntax
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: environments/${{ matrix.environment }}
+
+      # Generate planning run execution output
+      - name: Terraform Plan
+        run: terraform plan -no-color
+        working-directory: environments/${{ matrix.environment }}
+
+      # Perform apply step: staging on pushes to dev/main, production only on pushes to main
+      - name: Terraform Apply
+        if: >
+          github.event_name == 'push' &&
+          (
+            (matrix.environment == 'staging' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+            (matrix.environment == 'production' && github.ref == 'refs/heads/main')
+          )
+        run: terraform apply -auto-approve -no-color
+        working-directory: environments/${{ matrix.environment }}

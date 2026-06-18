@@ -1,0 +1,86 @@
+name: Build and Deploy Application to AWS ECS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - '.github/workflows/application.yml'
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: ecs-app-backend
+  CONTAINER_NAME: ecs-modular
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy Application
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [staging, production]
+      fail-fast: false
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Setup AWS credentials
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Connect with AWS Secrets Manager
+      - name: Retrieve Secrets from AWS Secrets Manager
+        uses: aws-actions/aws-secretsmanager-get-secrets@v2
+        with:
+          secret-ids: |
+            DATABASE_URL, ecs-modular-${{ matrix.environment }}-app-secrets
+            API_SECRET_KEY, ecs-modular-${{ matrix.environment }}-app-secrets
+          parse-json-secrets: true
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Build public production image, tag it and push to ECR
+      - name: Build, Tag, and Push Docker Image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./app/backend
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # Download active Task Definition from ECS to render changes
+      - name: Download Active Task Definition
+        run: |
+          aws ecs describe-task-definition --task-definition ecs-modular-${{ matrix.environment }}-task --query taskDefinition > task-definition.json
+
+      # Render the updated task definition containing the new ECR image reference
+      - name: Render Amazon ECS Task Definition
+        id: render-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      # Perform a rolling deployment to ECS Fargate Service
+      - name: Deploy Amazon ECS Task Definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: ecs-modular-${{ matrix.environment }}-service
+          cluster: ecs-modular-${{ matrix.environment }}-cluster
+          wait-for-service-stability: true
